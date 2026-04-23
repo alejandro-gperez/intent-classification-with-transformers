@@ -1,0 +1,35 @@
+services:
+  rabbitmq:
+    image: rabbitmq:4-management
+    container_name: rabbitmq
+    restart: always
+    environment:
+      RABBITMQ_DEFAULT_USER: bam
+      RABBITMQ_DEFAULT_PASS: r3t0_analitico
+    ports:
+      - "5672:5672"   # AMQP protocol port
+      - "15672:15672" # Management UI port
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: rabbitmq-diagnostics check_port_connectivity
+      interval: 10s
+      timeout: 10s
+      start_period: 10s
+      retries: 5
+
+  producer:
+    image: ghcr.io/capacidadesanaliticas/hackathon-producer:latest
+    container_name: producer
+    restart: always
+    environment:
+      RABBITMQ_USER: bam
+      RABBITMQ_PASS: r3t0_analitico
+      RABBITMQ_HOST: rabbitmq
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+
+volumes:
+  rabbitmq_data:
