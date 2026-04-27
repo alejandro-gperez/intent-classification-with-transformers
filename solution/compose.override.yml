@@ -1,7 +1,7 @@
 services:
   worker:
     build:
-      context: .                      # raíz del repo (para acceder a model/ y data/)
+      context: ..                      # raíz del repo (para acceder a model/ y data/)
       dockerfile: solution/Dockerfile
     image: bam-worker 
     container_name: bam_worker
