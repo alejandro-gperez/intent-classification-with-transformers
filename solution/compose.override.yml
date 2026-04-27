@@ -1,0 +1,15 @@
+services:
+  worker:
+    build:
+      context: .                      # raíz del repo (para acceder a model/ y data/)
+      dockerfile: solution/Dockerfile
+    container_name: bam_worker
+    restart: on-failure               # se reinicia si falla, no si se detiene manualmente
+    environment:
+      RABBITMQ_HOST:  rabbitmq
+      RABBITMQ_USER:  bam
+      RABBITMQ_PASS:  r3t0_analitico
+      RABBITMQ_VHOST: /
+    depends_on:
+      rabbitmq:
+        condition: service_healthy    # espera a que RabbitMQ pase su healthcheck

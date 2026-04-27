@@ -1,0 +1,5 @@
+torch
+transformers
+pika
+pandas
+scikit-learn
