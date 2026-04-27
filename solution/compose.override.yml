@@ -3,6 +3,7 @@ services:
     build:
       context: .                      # raíz del repo (para acceder a model/ y data/)
       dockerfile: solution/Dockerfile
+    image: bam-worker 
     container_name: bam_worker
     restart: on-failure               # se reinicia si falla, no si se detiene manualmente
     environment:
