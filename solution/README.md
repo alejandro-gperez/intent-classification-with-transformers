@@ -70,25 +70,105 @@ El modelo mejoró consistentemente sin señales de sobreajuste — la validation
 
 ## Lógica de predicción y safety net
 
-Una observación importante al poner el modelo en producción: aunque el F1 global es bueno, en muchos mensajes el modelo está entre 40–50% seguro. Un F1 alto no significa que siempre esté muy confiado — significa que acierta con frecuencia, pero no necesariamente con margen amplio.
+Una vez entrenado el modelo, la importancia no era mejorar el F1, sino lograr que fuese utilizable en producción.
 
-Para manejar eso, `predict()` implementa una capa de decisión antes de publicar el resultado:
+El modelo devuelve una distribución de probabilidades sobre 77 clases. En muchos casos, la predicción correcta no es acompañada por una confianza alta. Esto no implica que el modelo esté incorrecto, significa que el mensaje es de naturaleza ambigua. Es decir, hay muchas intenciones similares y el lenguaje usado por los usuarios no es 100% preciso.
 
+Si únicamente tomaramos la predicciónd de `argmax()`, obligamos al sistema a tomar una decisión incluso cuando no está seguro de su respuesta. En un entorno de producción esto añade errores que luego son difíciles de detectar.
+
+Ante esta problemática detectada, se implementó una capa adicional a la lógica de decisión: un Safety Net que se basa en la confianza del modelo y probabilidades. Todo esto está contenido en `predict()` y utiliza `config.py` y `preprocessing.py`.
+
+### Cómo funciona `predict()`
+
+1. `preprocessing.py` Limpia el texto de entrada.
+2. Se tokeniza utilizando el tokenizer del modelo.
+3. Ejecuta inferencia con DistilBERT.
+4. Convierte logits a probabilidades (softmax).
+5. Extrae las dos predicciones más probables (top-1 y top-2).
+6. Aplica una lógica de decisión basada en:
+   - confianza absoluta del top-1
+   - diferencia entre top-1 y top-2 (gap)
+
+### La Safety Net
+
+Existen dos señales clave a una respuesta que devuelve el modelo:
+- Confianza: qué tan seguro está de su respuesta.
+- Gap (top1 - top 2): qué tan clara es la diferencia entre opciones.
+
+Entonces, en el siguiente caso, sería incorrecto elegir top-1 arbitrariamente ya que el modelo no está seguro entre ambas respuestas:
+
+```bash
+Top-1: pending_transfer → 0.48
+Top-2: transfer_not_received → 0.45
+Gap: 0.03
 ```
-si confianza >= 0.70:
-    → high_confidence: publicar top-1 directamente
+### Lógica de decisión final
 
-si confianza >= 0.40:
-    si diferencia entre top-1 y top-2 < 0.15:
-        → ambiguous_used_top2: las dos opciones están muy cerca, usar top-2
+Para solucionar esto, se implementaron 3 zonas: `high_confidence`, `medium_confidence`, `low_confidence` usadas de la siguiente manera:
+
+```bash
+si confianza ≥ 0.65:
+    → high_confidence
+    → confiar en top-1
+
+si 0.45 ≤ confianza < 0.65:
+    si gap < 0.15:
+        → ambiguous_used_top2
+        → usar top-2 (ambigüedad real)
     si no:
-        → medium_confidence: publicar top-1
+        → medium_confidence
+        → usar top-1
 
-si confianza < 0.40:
-    → low_confidence: publicar top-1 pero marcar para revisión humana
+si confianza < 0.45:
+    → low_confidence
+    → usar top-1 pero marcar como incierto
 ```
 
-Cada mensaje publicado incluye el campo `decision`, que le dice al equipo de atención con qué nivel de certeza llegó ese mensaje. Eso permite priorizar revisión manual en los casos donde el modelo dudó.
+La configuración de esta lógica se implementó en `config.py` para tener un panel de control separado a la hora de calibrar o hacer ajustes en un futuro.
+
+Así como usar top-1 siempre es un error, utilizar siempre top-2 también lo es. Esto se descubrió al calibrar `predict()`. Al aumentar el uso de top-2, al subir el valor de gap, el resultado fue que habían más overrides y disminuyó la precisión. Por lo que forzar el uso de top-2 ocasiona más errores de los que corrige.
+
+La necesidad del Safety Net recae en que sin esta capa, el modelo asume que siempre tiene la razón. Al implementarla, el modelo:
+- Identifica qué tan seguro está
+- Detecta ambiguedad
+- Evita tomar decisiones arbitrarias
+- Expone la incertidumbre para monitoreo
+
+En otras palabras, el sistema no solo predice, sino que también evalúa la calidad de su propia predicción antes de actuar.
+
+### Resultados luego de calibrar
+
+Se evaluó el sistema sobre un subconjunto de validación (1000 ejemplos):
+- Accuracy: 0.88
+- High confidence: 26%
+- Medium confidence: 38%
+- Low confidence: 36%
+
+Por lo que se confirma que el modelo acierta con frecuencia pero no siempre con alta confianza. El sistema es capaz de reconocer esta incertidumbre. 
+
+Durante las pruebas, se descubrió que el modelo comete la mayoría de errores en pares que son semánticamente cercanos:
+- `top_up_failed` y `pending_top_up`
+- `declined_transfer` y `declined_card_payment`
+- `verify_my_identity` y `why_verify_identity`
+
+Incluso para un humano, estos casos pueden ser ambiguos. El modelo es capaz de reflejar esa dificultad y no la oculta debido al Safety Net.
+
+### Salida de `predict()`
+
+Cada mensaje incluye información útil adicional, con el objetivo de trazabilidad:
+
+```json
+{
+  "label": "pending_transfer",
+  "category": "transferencias",
+  "confidence": 0.48,
+  "top2_label": "transfer_not_received_by_recipient",
+  "gap": 0.03,
+  "decision": "low_confidence"
+}
+```
+
+Con esto se busca facilitar el debugging, monitorear, priorizar la supervisión humana y un análisis posterior del modelo.
 
 ---
 
