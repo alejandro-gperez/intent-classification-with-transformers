@@ -1,62 +1,61 @@
 # Reto Analítico Banco Agromercantil 
-## Informe Ejecutivo - Grupo AAC
-Integrantes: Alejandra Sierra, Alejandro Pérez, Camila Sandoval
+## Executive Report - Group AAC
+Group Members: Alejandra Sierra, Alejandro Pérez, Camila Sandoval
 
 ---
 
-## Resumen del proyecto
+## Project Summary
 
-El banco recibe miles de mensajes diarios por distintos canales: app, web, email y redes sociales. Antes de este sistema, un equipo de analistas los leía uno por uno y los redirigía manualmente al área correcta. Ese proceso no escala, genera demoras y no aprovecha el tiempo de las personas que lo hacen.
+The bank receives thousands of messages daily through different channels: app, web, email, and social media. Before this system, a team of analysts read them one by one and manually redirected them to the correct area. That process does not scale, causes delays, and does not make good use of the people’s time.
 
-Este proyecto construye un clasificador automático que lee cada mensaje, identifica la intención del cliente entre 77 posibles, y lo envía a la cola correcta en cuestión de segundos. Todo corre dentro de contenedores Docker conectados a RabbitMQ, sin depender de servicios externos.
-
----
-
-## De limpieza a producción: cómo llegamos hasta acá
-
-El trabajo se dividió en tres partes que se construyeron una sobre la otra:
-
-**Parte 1 — Datos y modelo.** Empezamos explorando el dataset: revisamos nulos, duplicados, distribución de clases y calidad general del texto. Con eso claro, preparamos los datos para entrenar: codificamos las etiquetas, hicimos el split de entrenamiento y validación de forma estratificada para respetar la distribución de las 77 clases, tokenizamos los textos con el tokenizador de DistilBERT y calculamos pesos por clase para compensar el desbalance. Luego hicimos el fine-tuning y evaluamos con F1.
-
-**Parte 2 — Lógica de predicción.** Con el modelo entrenado, el siguiente paso fue convertirlo en algo robusto para producción. Se construyó una función `predict()` que no solo devuelve la etiqueta más probable, sino que evalúa qué tan seguro está el modelo antes de tomar una decisión. Si la confianza es baja o las dos opciones principales están muy cerca, el sistema lo marca para revisión en vez de adivinar.
-
-**Parte 3 — Worker e integración.** La última pieza conecta todo: un worker dockerizado que consume mensajes de RabbitMQ, llama a `predict()`, y publica el resultado en la cola de la categoría correspondiente. El stack completo se levanta con un solo comando.
+This project builds an automatic classifier that reads each message, identifies the customer’s intent among 77 possible ones, and sends it to the correct queue in a matter of seconds. Everything runs inside Docker containers connected to RabbitMQ, without relying on external services.
 
 ---
 
-## Por qué elegimos DistilBERT
+## From cleaning to production: how we got here
+
+The work was divided into three parts that were built on top of each other:
+
+**Part 1 — Data and model.** We started by exploring the dataset: we checked nulls, duplicates, class distribution, and overall text quality. With that clear, we prepared the data for training: we encoded the labels, performed a stratified train-validation split to preserve the distribution of the 77 classes, tokenized the texts using the DistilBERT tokenizer, and computed class weights to compensate for imbalance. Then we fine-tuned the model and evaluated it using F1.
+
+**Part 2 — Prediction logic.** CWith the trained model, the next step was to turn it into something robust for production. A `predict()` function was built that not only returns the most probable label, but also evaluates how confident the model is before making a decision. If confidence is low or the top two options are very close, the system flags it for review instead of guessing.
+
+**Part 3 — Worker and integration.** The final piece connects everything: a dockerized worker that consumes messages from RabbitMQ, calls `predict()`, and publishes the result to the queue of the corresponding category. The full stack can be brought up with a single command.
+
+---
+
+## Why DistilBERT
 
 Evaluamos tres enfoques: un modelo de machine learning tradicional, fine-tuning de un transformer, y un flujo con LLM. La decisión fue DistilBERT por varias razones concretas:
 
-| Criterio | ML tradicional | DistilBERT (elegido) | LLM workflow |
+| Criteria | Traditional ML | DistilBERT (chosen) | LLM workflow |
 |---|---|---|---|
-| F1 esperado (77 clases) | 0.70–0.80 | **0.85–0.90** | 0.88–0.92 |
-| Latencia por mensaje | <10ms | ~80ms CPU / ~15ms GPU | 500ms–2s |
-| Costo operativo | Bajo | Bajo (modelo local) | Alto (API externa) |
-| Independencia de red | ✅ | ✅ | ❌ |
-| Corre en CPU (Docker) | ✅ | ✅ | Depende |
+| Expected F1 (77 classes) | 0.70–0.80 | **0.85–0.90** | 0.88–0.92 |
+| Latency per message | <10ms | ~80ms CPU / ~15ms GPU | 500ms–2s |
+| Operating cost | Low | Low (local model) | High (External API) |
+| Red independency | ✅ | ✅ | ❌ |
+| Runs in CPU (Docker) | ✅ | ✅ | Depends |
 
-DistilBERT es una versión compacta de BERT que mantiene buena precisión pero corre bien en CPU, lo cual era importante porque el worker corre dentro de Docker sin garantía de GPU. Además, Hugging Face tiene todo el ecosistema listo — tokenizador, modelo preentrenado, Trainer — así que en el tiempo disponible (5 días) era la opción más viable de implementar correctamente.
+DistilBERT is a compact version of BERT that maintains good accuracy but runs well on CPU, which was important because the worker runs inside Docker without any GPU guarantee. In addition, Hugging Face provides the full ecosystem ready to use — tokenizer, pretrained model, Trainer — so within the available time (5 days) it was the most viable option to implement correctly.
 
-El LLM hubiera dado F1 marginalmente más alto, pero depende de una API externa de pago, tiene latencia variable y agrega una dependencia de red que complica el despliegue local. El ML tradicional no alcanza el F1 necesario con 77 clases desbalanceadas.
+An LLM would have given a marginally higher F1, but it depends on a paid external API, has variable latency, and introduces a network dependency that complicates local deployment. Traditional ML does not reach the required F1 with 77 imbalanced classes.
 
-Una ventaja adicional: el desbalance de clases se manejó con `class_weights` directamente en la función de pérdida, algo que DistilBERT permite hacer de forma limpia y que en modelos tradicionales suele requerir técnicas más complejas como oversampling o SMOTE.
+An additional advantage: class imbalance was handled using `class_weights` directly in the loss function, something DistilBERT allows to be done cleanly and that in traditional models usually requires more complex techniques like oversampling or SMOTE.
 
-**Resultado obtenido:** F1 weighted **0.8539** · F1 macro **0.8557** · Accuracy **0.86** sobre 2,064 ejemplos de validación.
+**Obtained result:** F1 weighted **0.8539** · F1 macro **0.8557** · Accuracy **0.86** over 2,064 validation examples.
 
 ---
 
-## Pipeline de entrenamiento
+## Training Pipeline 
 
-El proceso de preparar los datos fue tan importante como el entrenamiento en sí. DistilBERT no entiende texto directamente — necesita que cada mensaje esté convertido en secuencias numéricas (tokens) con un formato específico. Antes de llegar ahí, el dataset necesitaba estar limpio.
+The data preparation process was just as important as the training itself. DistilBERT does not understand raw text directly — it needs each message to be converted into numerical sequences (tokens) with a specific format. Before getting there, the dataset had to be clean.
 
-Se eliminaron nulos y duplicados para no introducir ruido en el entrenamiento. Luego se codificaron las 77 etiquetas como números, se hizo el split estratificado (80% entrenamiento, 20% validación) para que todas las clases estuvieran representadas en ambas particiones, y se tokenizó con `MAX_LENGTH=256`, suficiente para cubrir la mayoría de los mensajes de clientes sin truncar información relevante.
+Nulls and duplicates were removed to avoid introducing noise into the training. Then, the 77 labels were encoded as numbers, a stratified split was performed (80% training, 20% validation) so that all classes were represented in both partitions, and the texts were tokenized with `MAX_LENGTH=256`, which is enough to cover most customer messages without truncating relevant information.
 
-El desbalance de clases era visible: algunas intenciones tenían muchos más ejemplos que otras. Sin corrección, el modelo tiende a ignorar las clases pequeñas. Se calcularon pesos inversamente proporcionales a la frecuencia de cada clase y se aplicaron en la función de pérdida durante el entrenamiento.
+Class imbalance was evident: some intents had many more examples than others. Without correction, the model tends to ignore smaller classes. We computed weights inversely proportional to the frequency of each class and applied them in the loss function during training.
+**PProgression by epoch:**
 
-**Progresión por época:**
-
-| Época | Training Loss | Validation Loss | F1 Weighted | F1 Macro |
+| Epoch | Training Loss | Validation Loss | F1 Weighted | F1 Macro |
 |---|---|---|---|---|
 | 1 | 3.2958 | 2.9744 | 0.4650 | 0.4720 |
 | 2 | 2.0829 | 1.8355 | 0.7561 | 0.7591 |
@@ -64,98 +63,98 @@ El desbalance de clases era visible: algunas intenciones tenían muchos más eje
 | 4 | 1.0858 | 0.9856 | 0.8517 | 0.8527 |
 | 5 | 0.9481 | 0.9094 | **0.8539** | **0.8557** |
 
-El modelo mejoró consistentemente sin señales de sobreajuste — la validation loss bajó en todas las épocas.
+The model improved consistently without signs of overfitting — the validation loss decreased in every epoch.
 
 ---
 
-## Lógica de predicción y safety net
+## Prediction logic & safety net
 
-Una vez entrenado el modelo, la importancia no era mejorar el F1, sino lograr que fuese utilizable en producción.
+Once the model was trained, the priority was no longer improving F1, but making it usable in production.
 
-El modelo devuelve una distribución de probabilidades sobre 77 clases. En muchos casos, la predicción correcta no es acompañada por una confianza alta. Esto no implica que el modelo esté incorrecto, significa que el mensaje es de naturaleza ambigua. Es decir, hay muchas intenciones similares y el lenguaje usado por los usuarios no es 100% preciso.
+The model returns a probability distribution over 77 classes. In many cases, the correct prediction is not accompanied by high confidence. This does not mean the model is wrong, it means the message is ambiguous in nature. In other words, there are many similar intents and the language used by users is not 100% precise.
 
-Si únicamente tomaramos la predicciónd de `argmax()`, obligamos al sistema a tomar una decisión incluso cuando no está seguro de su respuesta. En un entorno de producción esto añade errores que luego son difíciles de detectar.
+If we only take the `argmax()` prediction, we force the system to make a decision even when it is not confident in its answer. In a production environment, this introduces errors that are difficult to detect later.
 
-Ante esta problemática detectada, se implementó una capa adicional a la lógica de decisión: un Safety Net que se basa en la confianza del modelo y probabilidades. Todo esto está contenido en `predict()` y utiliza `config.py` y `preprocessing.py`.
+Given this issue, an additional layer was implemented in the decision logic: a Safety Net based on model confidence and probabilities. All of this is contained within `predict()` and uses `config.py` and `preprocessing.py`.
 
-### Cómo funciona `predict()`
+### How does `predict()` work
 
-1. `preprocessing.py` Limpia el texto de entrada.
-2. Se tokeniza utilizando el tokenizer del modelo.
-3. Ejecuta inferencia con DistilBERT.
-4. Convierte logits a probabilidades (softmax).
-5. Extrae las dos predicciones más probables (top-1 y top-2).
-6. Aplica una lógica de decisión basada en:
-   - confianza absoluta del top-1
-   - diferencia entre top-1 y top-2 (gap)
+1. `preprocessing.py` Cleans the input text.
+2. It is tokenized using the model’s tokenizer.
+3. Runs inference with DistilBERT.
+4. Converts logits to probabilities (softmax).
+5. Extracts the two most probable predictions (top-1 and top-2).
+6. Applies a decision logic based on:
+   - absolute confidence of the top-1
+   - difference between top-1 and top-2 (gap)
 
-### La Safety Net
+### Safety Net
 
-Existen dos señales clave a una respuesta que devuelve el modelo:
-- Confianza: qué tan seguro está de su respuesta.
-- Gap (top1 - top 2): qué tan clara es la diferencia entre opciones.
+There are two key signals in a model’s output:
+- Confidence: how sure it is about its prediction.
+- Gap (top1 - top 2): how clear the difference is between options.
 
-Entonces, en el siguiente caso, sería incorrecto elegir top-1 arbitrariamente ya que el modelo no está seguro entre ambas respuestas:
+So, in the following case, it would be incorrect to choose top-1 arbitrarily since the model is not confident between both responses:
 
 ```bash
 Top-1: pending_transfer → 0.48
 Top-2: transfer_not_received → 0.45
 Gap: 0.03
 ```
-### Lógica de decisión final
+### Final decision logic
 
-Para solucionar esto, se implementaron 3 zonas: `high_confidence`, `medium_confidence`, `low_confidence` usadas de la siguiente manera:
+To fix this, 3 zones were implemented: `high_confidence`, `medium_confidence`, `low_confidence` used the following way:
 
 ```bash
-si confianza ≥ 0.65:
+if confidence ≥ 0.65:
     → high_confidence
-    → confiar en top-1
+    → trust top-1
 
-si 0.45 ≤ confianza < 0.65:
-    si gap < 0.15:
+if 0.45 ≤ confidence < 0.65:
+    if gap < 0.15:
         → ambiguous_used_top2
-        → usar top-2 (ambigüedad real)
-    si no:
+        → use top-2 (real ambiguity)
+    else:
         → medium_confidence
-        → usar top-1
+        → use top-1
 
-si confianza < 0.45:
+if confidence < 0.45:
     → low_confidence
-    → usar top-1 pero marcar como incierto
+    → use top-1 and mark as uncertain
 ```
 
-La configuración de esta lógica se implementó en `config.py` para tener un panel de control separado a la hora de calibrar o hacer ajustes en un futuro.
+The configuration of this logic was implemented in `config.py` to provide a separate control panel for calibration or future adjustments.
 
-Así como usar top-1 siempre es un error, utilizar siempre top-2 también lo es. Esto se descubrió al calibrar `predict()`. Al aumentar el uso de top-2, al subir el valor de gap, el resultado fue que habían más overrides y disminuyó la precisión. Por lo que forzar el uso de top-2 ocasiona más errores de los que corrige.
+Just as always using top-1 is a mistake, always using top-2 is as well. This was discovered while calibrating `predict()`. As the use of top-2 increased, and the gap threshold was raised, the result was more overrides and decreased precision. Forcing the use of top-2 introduces more errors than it fixes.
 
-La necesidad del Safety Net recae en que sin esta capa, el modelo asume que siempre tiene la razón. Al implementarla, el modelo:
-- Identifica qué tan seguro está
-- Detecta ambiguedad
-- Evita tomar decisiones arbitrarias
-- Expone la incertidumbre para monitoreo
+The need for the Safety Net lies in the fact that without this layer, the model assumes it is always right. By implementing it, the model:
+- Identifies how confident it is
+- Detects ambiguity
+- Avoids making arbitrary decisions
+- Exposes uncertainty for monitoring
 
-En otras palabras, el sistema no solo predice, sino que también evalúa la calidad de su propia predicción antes de actuar.
+In other words, the system not only predicts, but also evaluates the quality of its own prediction before acting.
 
-### Resultados luego de calibrar
+### Results after calibrating
 
-Se evaluó el sistema sobre un subconjunto de validación (1000 ejemplos):
+The system was evaluated on a validation subset (1,000 examples):
 - Accuracy: 0.88
 - High confidence: 26%
 - Medium confidence: 38%
 - Low confidence: 36%
 
-Por lo que se confirma que el modelo acierta con frecuencia pero no siempre con alta confianza. El sistema es capaz de reconocer esta incertidumbre. 
+This confirms that the model is often correct, but not always with high confidence. The system is able to recognize this uncertainty.
 
-Durante las pruebas, se descubrió que el modelo comete la mayoría de errores en pares que son semánticamente cercanos:
-- `top_up_failed` y `pending_top_up`
-- `declined_transfer` y `declined_card_payment`
-- `verify_my_identity` y `why_verify_identity`
+During testing, it was found that the model makes most of its errors in pairs that are semantically close:
+- `top_up_failed` and `pending_top_up`
+- `declined_transfer` and `declined_card_payment`
+- `verify_my_identity` and `why_verify_identity`
 
-Incluso para un humano, estos casos pueden ser ambiguos. El modelo es capaz de reflejar esa dificultad y no la oculta debido al Safety Net.
+Even for a human, these cases can be ambiguous. The model is able to reflect that difficulty and does not hide it thanks to the Safety Net.
 
-### Salida de `predict()`
+### `predict()` output
 
-Cada mensaje incluye información útil adicional, con el objetivo de trazabilidad:
+Each message includes additional useful information, with the goal of traceability:
 
 ```json
 {
@@ -168,93 +167,93 @@ Cada mensaje incluye información útil adicional, con el objetivo de trazabilid
 }
 ```
 
-Con esto se busca facilitar el debugging, monitorear, priorizar la supervisión humana y un análisis posterior del modelo.
+This is intended to make debugging easier, enable monitoring, prioritize human review, and support further analysis of the model.
 
 ---
 
-## ¿Dónde vive el modelo?
+## Where does the mode live
 
-El modelo vive dentro de la imagen Docker. Cuando se construye la imagen, los archivos del modelo se copian adentro y el worker los carga al arrancar. No necesita descargar nada ni conectarse a ningún servicio externo para funcionar.
+The model lives inside the Docker image. When the image is built, the model files are copied inside and the worker loads them at startup. It does not need to download anything or connect to any external service to function.
 
 ```
 Imagen Docker
 └── /app/
     ├── worker.py
     ├── src/inference/
-    │   ├── predictor.py       ← función predict() con safety net
-    │   ├── config.py          ← thresholds de confianza
-    │   └── preprocessing.py   ← limpieza de texto
+    │   ├── predictor.py       ← predict() function with safety net
+    │   ├── config.py          ← confidence thresholds
+    │   └── preprocessing.py   ← string cleaning
     └── model/
-        ├── model.safetensors  ← pesos del modelo (~250MB)
+        ├── model.safetensors  ← model weights (~250MB)
         ├── tokenizer.json
         ├── config.json
-        └── label_encoder.pkl  ← mapeo label_id → nombre de intención
+        └── label_encoder.pkl  ← mapping label_id → intent name
 ```
 
-Esto garantiza que la misma imagen siempre use el mismo modelo. La limitación es que si se reentrena el modelo, hay que reconstruir la imagen. En un entorno de producción más maduro se usaría un registry como MLflow o S3, pero para el alcance de este proyecto la solución embebida es la correcta.
+This guarantees that the same image always uses the same model. The limitation is that if the model is retrained, the image must be rebuilt. In a more mature production environment, a registry such as MLflow or S3 would typically be used for versioning and artifact storage, but for the scope of this project, the embedded solution is the correct choice.
 
 ---
 
-## ¿Cómo se actualiza el modelo?
+## How to update the model
 
-Si se obtienen datos nuevos o se quiere mejorar el modelo, el proceso es:
+If new data is obtained or the model needs to be improved, the process is:
 
-1. Correr `cleaning/model-training.ipynb` con los datos actualizados. Esto genera archivos nuevos en `model/`.
-2. Reconstruir y reiniciar el worker:
+1. Run `cleaning/model-training.ipynb` with the updated data. This generates new files in `model/`.
+2. Rebuild and restart the worker:
 
 ```bash
 docker compose -f deploy/compose.yml -f solution/compose.override.yml build worker
 docker compose -f deploy/compose.yml -f solution/compose.override.yml up -d worker
 ```
 
-Mientras el worker se reinicia, los mensajes que lleguen no se pierden — quedan esperando en la cola `incoming_social_messages` y se procesan en cuanto el nuevo worker está listo. Esto es una ventaja directa de la arquitectura event-driven: el clasificador y el canal de entrada están desacoplados.
+While the worker restarts, incoming messages are not lost — they remain queued in `incoming_social_messages` and are processed as soon as the new worker is ready. This is a direct advantage of the event-driven architecture: the classifier and the input channel are decoupled.
 
 ---
 
-## ¿Qué pasa si el volumen de mensajes se duplica?
+## What happens if the message volume doubles
 
-El worker actual procesa un mensaje a la vez. Si el volumen crece mucho, los mensajes se acumulan en la cola — RabbitMQ los sostiene sin problema — pero el tiempo de respuesta aumenta.
+The current worker processes one message at a time. If the volume grows significantly, messages accumulate in the queue — RabbitMQ handles them without issue — but the response time increases.
 
-La solución es levantar más instancias del worker:
+The solution is to spin up more worker instances:
 
 ```bash
 docker compose -f deploy/compose.yml -f solution/compose.override.yml up -d --scale worker=3
 ```
 
-Con eso, tres workers procesan mensajes en paralelo desde la misma cola y RabbitMQ los distribuye automáticamente. No requiere cambios en el código. El cuello de botella es la inferencia del modelo (no el broker), y agregar workers es la forma directa de resolverlo.
+With that, three workers process messages in parallel from the same queue, and RabbitMQ distributes them automatically. No code changes are required. The bottleneck is model inference (not the broker), and adding workers is the most direct way to address it.
 
-Cada instancia de DistilBERT ocupa aproximadamente 250MB en memoria. Con tres instancias son ~750MB, lo cual es manejable en cualquier servidor moderno.
+Each DistilBERT instance uses approximately 250MB of memory. With three instances, that’s about ~750MB, which is manageable on any modern server.
 
 ---
 
-## ¿Cómo se monitorea en producción?
+## How is it monitored in production?
 
-**RabbitMQ Management UI** (`http://localhost:15672`): permite ver en tiempo real cuántos mensajes hay en cada cola, a qué velocidad se procesan, y si el worker está activo. Si la cola de entrada crece sin parar, algo está mal con el worker.
+**RabbitMQ Management UI** (`http://localhost:15672`): allows you to see in real time how many messages are in each queue, the processing rate, and whether the worker is active. If the input queue keeps growing without stopping, something is wrong with the worker.
 
-**Logs del worker:** cada mensaje deja un registro con su etiqueta, categoría, confianza y tipo de decisión:
+**Worker logs:** each message leaves a record with its label, category, confidence, and decision type:
 
 ```bash
-# Ver mensajes de baja confianza
+# See messages with low confidence
 docker logs bam_worker -f | grep "low_confidence"
 ```
 
-**Distribución de categorías:** si de repente el 80% de los mensajes van a `fraude` cuando históricamente era el 15%, hay un problema — ya sea en el modelo o en el mapeo de etiquetas.
+**Category distribution:** if suddenly 80% of messages are going to `fraude` when historically it was 15%, there’s a problem — either with the model or with the label mapping.
 
-| Señal | Causa probable |
+| Cue | Probable cause |
 |---|---|
-| Cola de entrada crece sin parar | Worker caído o muy lento |
-| Muchos mensajes con `low_confidence` | Mensajes fuera de lo que el modelo conoce |
-| Una categoría recibe casi todo el tráfico | Bug en el mapeo label → categoría |
-| F1 baja en revisión humana | El modelo necesita reentrenarse |
+| Input queue keeps growing without stopping | Worker down or too slow |
+| Many messages with `low_confidence` | Messages outside what the model knows |
+| One category receives almost all the traffic | Bug in the label → category mapping |
+| Low F1 in human review | The model needs to be retrained |
 
-La métrica que realmente importa al negocio no es el F1 del notebook, sino cuántos mensajes llegan al equipo correcto. Eso solo se puede medir comparando predicciones contra revisiones humanas en producción.
+The metric that truly matters to the business is not the F1 score in the notebook, but how many messages reach the correct team. That can only be measured by comparing predictions against human reviews in production.
 
 ---
 
-## Levantar el stack completo
+## Bring up the full stack
 
 ```bash
 docker compose -f deploy/compose.yml -f solution/compose.override.yml up -d
 ```
 
-Ese comando levanta RabbitMQ, el producer de mensajes sintéticos y el worker. Los mensajes empiezan a fluir automáticamente hacia las colas de categoría.
+That command starts RabbitMQ, the synthetic message producer, and the worker. Messages begin to flow automatically into the category queues.
