@@ -26,7 +26,7 @@ The work was divided into three parts that were built on top of each other:
 
 ## Why DistilBERT
 
-Evaluamos tres enfoques: un modelo de machine learning tradicional, fine-tuning de un transformer, y un flujo con LLM. La decisión fue DistilBERT por varias razones concretas:
+We evaluated three approaches: a traditional machine learning model, transformer fine-tuning, and an LLM-based pipeline. The decision was DistilBERT for several concrete reasons:
 
 | Criteria | Traditional ML | DistilBERT (chosen) | LLM workflow |
 |---|---|---|---|
